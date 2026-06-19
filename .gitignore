@@ -1,0 +1,31 @@
+# Environment files
+.env
+**/.env
+*.env
+
+# Python virtual environments
+venv/
+.venv/
+**/venv/
+**/.venv/
+backend/venv/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local uploaded files and vector database
+backend/uploads/
+backend/chroma_db/
+uploads/
+chroma_db/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+desktop.ini
+Thumbs.db
