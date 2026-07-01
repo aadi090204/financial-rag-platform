@@ -1,4 +1,4 @@
-name: Continuous Integration
+name: Finance RAG CI/CD
 
 on:
   pull_request:
@@ -9,69 +9,150 @@ on:
     branches:
       - main
 
+concurrency:
+  group: finance-rag-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 env:
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  BACKEND_IMAGE: adithya09/finance-rag-advisor-backend
+  FRONTEND_IMAGE: adithya09/finance-rag-advisor-frontend
 
 jobs:
 
   validate:
-    name: Validate Project
+    name: Validate Docker Compose
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Validate Docker Compose
+      - name: Validate Compose File
         run: docker compose config
 
-  build:
-    name: Build Containers
+  integration-test:
+    name: Build & Integration Test
     runs-on: ubuntu-latest
     needs: validate
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Build Images
-        run: docker compose build
+      - name: Build and Start Containers
+        run: docker compose up -d --build
 
-  integration-test:
-    name: Integration Test
-    runs-on: ubuntu-latest
-    needs: build
+      - name: Wait for Backend Health
+        run: |
+          echo "Waiting for backend..."
 
-    steps:
-      - uses: actions/checkout@v4
+          for i in {1..30}; do
+            if curl -fs http://localhost:8000/health > /dev/null; then
+              echo "Backend is healthy"
+              exit 0
+            fi
 
-      - name: Build Images
-        run: docker compose build
+            sleep 5
+          done
 
-      - name: Start Containers
-        run: docker compose up -d
+          echo "Backend failed to start."
 
-      - name: Wait for Backend
-        run: sleep 30
+          docker compose logs backend
 
-      - name: Backend Health Check
-        run: curl -f http://localhost:8000/health
+          exit 1
 
-      - name: Frontend Reachability
-        run: curl -I http://localhost:3000
+      - name: Verify Backend
+        run: |
+          curl -f http://localhost:8000/health
 
-      - name: Show Containers
+      - name: Verify Frontend
+        run: |
+          curl -I http://localhost:3000
+
+      - name: Show Running Containers
         if: always()
-        run: docker ps -a
+        run: docker ps
 
       - name: Show Backend Logs
         if: failure()
-        run: docker logs rag-backend
+        run: docker compose logs backend
+
+      - name: Show Frontend Logs
+        if: failure()
+        run: docker compose logs frontend
 
       - name: Stop Containers
         if: always()
         run: docker compose down -v
+
+  publish-images:
+    name: Publish Docker Images
+    runs-on: ubuntu-latest
+    needs: integration-test
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      ####################################################
+      # Backend Image
+      ####################################################
+
+      - name: Backend Metadata
+        id: backend-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.BACKEND_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Build & Push Backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ steps.backend-meta.outputs.tags }}
+          labels: ${{ steps.backend-meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      ####################################################
+      # Frontend Image
+      ####################################################
+
+      - name: Frontend Metadata
+        id: frontend-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.FRONTEND_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: ${{ steps.frontend-meta.outputs.tags }}
+          labels: ${{ steps.frontend-meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
