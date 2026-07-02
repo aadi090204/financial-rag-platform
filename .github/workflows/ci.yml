@@ -165,7 +165,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Deploy Application
+      - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -185,24 +185,36 @@ jobs:
             echo "Waiting for backend to become healthy..."
 
             for i in {1..30}; do
+
               if curl -fs http://localhost:8000/health >/dev/null; then
+
                 echo "Backend is healthy."
                 curl http://localhost:8000/health
 
-                echo "Running containers:"
+                echo "Running containers..."
                 docker ps
 
+                echo "Cleaning dangling Docker images..."
+                docker image prune -f
+
+                echo "Docker disk usage:"
+                docker system df
+
                 echo "Deployment completed successfully."
+
                 exit 0
+
               fi
 
               echo "Attempt $i/30 - backend not ready yet..."
               sleep 5
+
             done
 
             echo "Backend failed to become healthy."
 
             docker ps
+
             docker logs rag-backend --tail=100
 
             exit 1
